@@ -1,5 +1,7 @@
 # Builds the offline web app (PWA) and publishes it with GitHub Pages.
-# Enable it once: repository Settings → Pages → Source: "GitHub Actions".
+# Enable it once: repository Settings → Pages → Build and deployment → Source: "GitHub Actions"
+# (NOT "Deploy from a branch" — that publishes the repository files and shows the README).
+# All actions below run on Node.js 24 (Node.js 20 is deprecated on GitHub's runners).
 name: Web app (PWA)
 
 on:
@@ -20,13 +22,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # GitHub Pages must publish from this workflow, not from the branch files
+      # (otherwise the site shows the README instead of the app).
+      - name: Check GitHub Pages is set to "GitHub Actions"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          type=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type 2>/dev/null || echo missing)
+          echo "GitHub Pages build type: $type"
+          if [ "$type" != "workflow" ]; then
+            echo "::error title=GitHub Pages is not set to GitHub Actions::Open https://github.com/${{ github.repository }}/settings/pages and under 'Build and deployment' set Source to 'GitHub Actions' (it is now '$type'; 'legacy' means 'Deploy from a branch', which only shows the README). Then re-run this workflow."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2   # v2.9.3+ runs on Node.js 24
+      - uses: actions/configure-pages@v6
       - run: ./web/build.sh
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: web/dist
 
@@ -38,4 +53,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

@@ -153,6 +153,20 @@ Cloudflare Pages, your own server). It only needs the internet for the **first v
 
 **By hand:** run `./web/build.sh` and upload the *contents* of `web/dist/` to your host.
 
+**Seeing the README instead of the app?** GitHub Pages is set to *Deploy from a
+branch*, which publishes the repository files (and renders `README.md`) instead of the
+built app. Fix it once:
+
+1. Open `https://github.com/<your-user>/<repository>/settings/pages`.
+2. Under **Build and deployment → Source**, choose **GitHub Actions** (not *Deploy from a branch*).
+3. Go to the **Actions** tab → **Web app (PWA)** → **Run workflow** (or push a commit) and wait
+   for both jobs (*build* and *deploy*) to finish with a green check.
+4. Open `https://<your-user>.github.io/<repository>/` — you should see the app, not the README.
+   If you already added the README page to your Home Screen, delete that icon and add it
+   again from the app's page.
+
+The workflow checks this setting first and stops with the same instructions if it is wrong.
+
 **Install:** open the address in **Safari** on the iPhone or iPad → tap **Share** →
 **Add to Home Screen**. Open Folio from the new icon once while online so it can cache
 itself; after that it works in airplane mode. A new version is picked up the next time
