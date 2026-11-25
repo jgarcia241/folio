@@ -134,7 +134,7 @@ web/dist/
 ```
 
 If [Binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed the script
-also uses it to make the download smaller (optional).
+also uses it to make the download smaller (optional). .
 
 **Try it on your computer:** serve the folder over HTTP, e.g.
 `python3 -m http.server 8080 --directory web/dist`, and open <http://localhost:8080>
