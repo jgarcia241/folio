@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Fit the screen, no pinch-zoom of the whole app (the app has its own layout for phones). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <!-- Installable on iPhone / iPad ("Add to Home Screen") and Android. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Folio">
+  <meta name="theme-color" content="#f7f7f5">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <title>Folio</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; overscroll-behavior: none; }
+    #folio_canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+    #folio_loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #9b9a97; background: #fff; }
+    #folio_loading.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="folio_canvas"></canvas>
+  <div id="folio_loading">Loading Folio…</div>
+
+  <script>
+    // ---------------------------------------------------------------------------
+    // Storage: every note file lives in this device's IndexedDB, so the app works
+    // with no connection at all. The Rust app keeps an in-memory copy and calls
+    // folioHost.put / folioHost.remove after each change.
+    // ---------------------------------------------------------------------------
+    (function () {
+      const DB_NAME = "folio", STORE = "files";
+      const dbReady = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+
+      const pending = new Map();
+      let timer = null;
+      function schedule() { if (!timer) timer = setTimeout(flush, 40); }
+      async function flush() {
+        timer = null;
+        if (pending.size === 0) return;
+        const db = await dbReady;
+        const items = [...pending];
+        pending.clear();
+        const tx = db.transaction(STORE, "readwrite");
+        const st = tx.objectStore(STORE);
+        for (const [key, value] of items) {
+          if (value === null) st.delete(key); else st.put(value, key);
+        }
+      }
+      // Save right away when the app goes to the background or is closed.
+      document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); });
+      window.addEventListener("pagehide", flush);
+
+      async function loadAll() {
+        const db = await dbReady;
+        return new Promise((resolve, reject) => {
+          const out = [];
+          const req = db.transaction(STORE, "readonly").objectStore(STORE).openCursor();
+          req.onsuccess = () => {
+            const c = req.result;
+            if (c) { out.push([c.key, c.value]); c.continue(); } else resolve(out);
+          };
+          req.onerror = () => reject(req.error);
+        });
+      }
+
+      window.folioHost = {
+        loadAll,
+        put(path, data, mtime) {
+          // `data` is a view into the app's memory: copy it.
+          pending.set(path, { data: new Uint8Array(data), mtime });
+          schedule();
+        },
+        remove(path) { pending.set(path, null); schedule(); },
+
+        // Choose files (Files app, Photos, iCloud Drive, Google Drive, OneDrive...).
+        pick(id, accept, multiple) {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = accept;
+          input.multiple = multiple;
+          input.style.display = "none";
+          document.body.appendChild(input);
+          input.addEventListener("change", async () => {
+            for (const f of input.files) {
+              const bytes = new Uint8Array(await f.arrayBuffer());
+              window.folioWasm.folio_picked(id, f.name, bytes);
+            }
+            input.remove();
+          });
+          input.click();
+        },
+
+        // Export: the share sheet on iPhone/iPad ("Save to Files"), a download elsewhere.
+        async share(name, data, mime) {
+          const blob = new Blob([new Uint8Array(data)], { type: mime });
+          const file = new File([blob], name, { type: mime });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try { await navigator.share({ files: [file], title: name }); return; }
+            catch (e) { if (e && e.name === "AbortError") return; }
+          }
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = name;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+        },
+
+        openUrl(url) { window.open(url, "_blank", "noopener"); },
+      };
+    })();
+  </script>
+
+  <script type="module">
+    import init, * as wasm from "./folio.js";
+
+    async function start() {
+      await init();
+      window.folioWasm = wasm;
+      // Hand every saved file to the app, then start it.
+      const files = await window.folioHost.loadAll();
+      for (const [path, v] of files) wasm.folio_preload(path, v.data, v.mtime || 0);
+      const touch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
+      wasm.folio_start("folio_canvas", touch);
+      document.getElementById("folio_loading").classList.add("hidden");
+
+      // Ask the browser to keep the notes even when storage runs low.
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+      // iPhone/iPad only show the keyboard when a text field is focused during the
+      // tap itself. When a tap lands on a text area, focus the app's hidden text input now.
+      document.addEventListener("touchend", (e) => {
+        const t = e.changedTouches && e.changedTouches[0];
+        if (!t || !wasm.folio_editable_at(t.clientX, t.clientY)) return;
+        const agent = [...document.querySelectorAll("input[type=text]")].find((i) => i.getAttribute("autocapitalize") === "off");
+        if (agent) agent.focus({ preventScroll: true });
+      }, { capture: true, passive: true });
+    }
+
+    start().catch((e) => {
+      console.error(e);
+      document.getElementById("folio_loading").textContent = "Folio could not start: " + e;
+    });
+
+    // Offline support: cache the app so it opens with no connection.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch((e) => console.warn("service worker:", e));
+    }
+  </script>
+</body>
+</html>
