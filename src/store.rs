@@ -168,8 +168,14 @@ impl Workspace {
 
     /// The whole notes folder as a .zip (pages, folders and pictures).
     pub fn export_zip(&mut self) -> Vec<u8> {
-        self.flush(0.0, true);
         let top = self.name();
+        self.export_zip_named(&top)
+    }
+
+    /// The notes as a .zip whose top folder is called `top`.
+    pub fn export_zip_named(&mut self, top: &str) -> Vec<u8> {
+        self.flush(0.0, true);
+        let top = sanitize(top);
         let mut files: Vec<(String, Vec<u8>)> = Vec::new();
         for p in fs::list_all(&self.root) {
             if let (Ok(rel), Ok(bytes)) = (p.strip_prefix(&self.root), fs::read(&p)) {

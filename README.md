@@ -161,6 +161,38 @@ also uses it to make the download smaller (optional). .
 (opening `index.html` straight from disk does not work: browsers only allow the offline
 cache over `http://localhost` or `https://`).
 
+### Saving your notes into a Files folder (iPhone / iPad)
+
+Safari keeps the web app's notes on the device; to put them in a folder of the **Files** app
+(iCloud Drive, On My iPhone, Google Drive, OneDrive…):
+
+**All notes, the simple way**
+
+1. Tap ☰ → the workspace name at the bottom of the sidebar → **Save to Files…**
+   (if you opened a folder from Files and changed pages, a blue **Save to Files** button also
+   appears at the top of the sidebar).
+2. In the share sheet tap **Save to Files**, choose the place (for example *iCloud Drive*),
+   tap **Save**. You get one `.zip` named like your folder.
+3. In the Files app, tap the `.zip` once: it unpacks into a folder with all pages (`.md`),
+   sub-folders and pictures. If an older copy of the folder is there, delete it first, or
+   keep both.
+
+**Just one page:** open the page → **···** (top right) → **Save this page to Files…** →
+**Save to Files**. It saves that page as a single `.md` file.
+
+**One tap, straight into the same folder (Shortcuts app)** — set up once per device:
+
+1. Open **Shortcuts** → **+** → name it *Save Folio notes*.
+2. Tap the **ⓘ** (details) → turn on **Show in Share Sheet**, and set it to receive **Files**.
+3. Add the action **Extract Archive** (input: *Shortcut Input*).
+4. Add the action **Save File**: turn **Ask Where to Save** off, choose the folder that
+   *contains* your notes folder (e.g. *iCloud Drive*), and turn **Overwrite If File Exists** on.
+5. In Folio: **Save to Files…** → in the share sheet pick **Save Folio notes** instead of *Save
+   to Files*. The notes folder is replaced with the current version in one step.
+
+(The Shortcut runs on the device and needs no internet. Apple's Shortcuts app is set up by
+hand; Folio can't create it for you.)
+
 ### Saving automatically on iPhone / iPad
 
 Safari gives web apps no way to write into a folder in the Files app, so on iPhone and

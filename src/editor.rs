@@ -745,6 +745,16 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
     // Web: the linked folder needs a tap before the browser lets the app use it again.
     if crate::platform::IS_WEB {
         let st = crate::platform::folder_state();
+        if st.mode == 2 && !st.status.is_empty() {
+            // Read from Files on iPhone/iPad: remind to save the changes back.
+            let b = egui::Button::new(RichText::new(format!("💾  Save to Files ({})", st.status.split(' ').next().unwrap_or(""))).color(Color32::WHITE).size(14.0)).fill(c.accent).corner_radius(6);
+            if ui.add_sized([ui.available_width(), if theme::touch_ui() { 44.0 } else { 30.0 }], b).on_hover_text(&st.status).clicked() {
+                let top = if st.name.is_empty() { app.ws.name() } else { st.name.clone() };
+                let bytes = app.ws.export_zip_named(&top);
+                let _ = crate::platform::save_file(&format!("{top}.zip"), &bytes);
+            }
+            ui.add_space(8.0);
+        }
         if st.mode == 3 {
             let text = if st.provider.is_empty() { format!("🔗  Reconnect folder \"{}\"", st.name) } else { format!("🔗  Sign in to {} again", st.provider) };
             let b = egui::Button::new(RichText::new(text).color(Color32::WHITE).size(14.0)).fill(c.accent).corner_radius(6);
@@ -921,9 +931,17 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
             if ui.button("⬇  Import notes or pictures…").on_hover_text(".md pages, pictures, or a .zip of a notes folder").clicked() {
                 crate::platform::pick(crate::platform::PickKind::Import);
             }
-            if ui.button("⬆  Export everything as .zip…").on_hover_text("All pages, folders and pictures, ready to save anywhere").clicked() {
-                let bytes = app.ws.export_zip();
-                let name = format!("{}.zip", app.ws.name());
+            let (export_label, export_hint) = if crate::platform::IS_WEB {
+                ("💾  Save to Files…", "Saves all pages, folders and pictures as one .zip: choose \"Save to Files\" and a folder (iCloud Drive, Google Drive, OneDrive…). Tap the .zip in Files to unpack it.")
+            } else {
+                ("⬆  Export everything as .zip…", "All pages, folders and pictures, ready to save anywhere")
+            };
+            if ui.button(export_label).on_hover_text(export_hint).clicked() {
+                // Read from Files: name the zip (and its top folder) like that folder.
+                let st = crate::platform::folder_state();
+                let top = if st.mode == 2 && !st.name.is_empty() { st.name.clone() } else { app.ws.name() };
+                let bytes = app.ws.export_zip_named(&top);
+                let name = format!("{top}.zip");
                 match crate::platform::save_file(&name, &bytes) {
                     Ok(true) => app.set_status("Exported", ui.input(|i| i.time)),
                     Ok(false) => {}
@@ -1484,6 +1502,16 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
                 if !crate::platform::IS_WEB && ui.button("🔎  Show file").clicked() {
                     if let Some(e) = app.ws.get(pid) {
                         reveal(&e.path);
+                    }
+                    ui.close();
+                }
+                if ui.button(if crate::platform::IS_WEB { "💾  Save this page to Files…" } else { "💾  Save a copy of this page…" }).on_hover_text("Saves this page as one .md file").clicked() {
+                    if let Some(e) = app.ws.get(pid) {
+                        let name = format!("{}.md", e.page.display_title().replace(['/', '\\', ':'], " "));
+                        let bytes = crate::model::to_markdown(&e.page).into_bytes();
+                        if let Err(err) = crate::platform::save_file(&name, &bytes) {
+                            app.set_status(format!("Could not save: {err}"), now);
+                        }
                     }
                     ui.close();
                 }

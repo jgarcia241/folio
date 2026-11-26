@@ -402,7 +402,10 @@
   let lastError = "";
   let queue = Promise.resolve();
 
+  // Pages changed since a folder was read from Files (Safari can't save them back by itself).
+  const changedSinceRead = new Set();
   function statusText() {
+    if (!backend && mode === 2) return changedSinceRead.size ? `${changedSinceRead.size} change${changedSinceRead.size === 1 ? "" : "s"} not saved to Files` : "";
     if (!backend) return "";
     if (mode === 3) return "Sign in again";
     if (!navigator.onLine && backend.kind !== "local") return unsynced.size ? `Offline · ${unsynced.size} change${unsynced.size === 1 ? "" : "s"} waiting` : "Offline";
@@ -613,6 +616,7 @@
       const copy = new Uint8Array(data); // `data` is a view into the app's memory
       pending.set(path, { data: copy, mtime });
       schedule();
+      if (mode === 2 && path.startsWith(ROOT)) { changedSinceRead.add(path); state(); }
       if (backend && path.startsWith(ROOT)) {
         const rel = path.slice(ROOT.length);
         unsynced.add(rel);
@@ -624,6 +628,7 @@
     remove(path) {
       pending.set(path, null);
       schedule();
+      if (mode === 2 && path.startsWith(ROOT)) { changedSinceRead.add(path); state(); }
       if (backend && path.startsWith(ROOT)) {
         const rel = path.slice(ROOT.length);
         unsynced.add(rel);
@@ -712,10 +717,12 @@
     async share(name, data, mime) {
       const blob = new Blob([new Uint8Array(data)], { type: mime });
       const file = new File([blob], name, { type: mime });
+      const saved = () => { if (name.endsWith(".zip")) { changedSinceRead.clear(); state(); } };
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: name }); return; }
+        try { await navigator.share({ files: [file], title: name }); saved(); return; }
         catch (e) { if (e && e.name === "AbortError") return; }
       }
+      saved();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = name;
