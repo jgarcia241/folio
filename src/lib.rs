@@ -99,6 +99,51 @@ mod web {
         crate::platform::deliver(id, name, data);
     }
 
+    /// The folder picked in the web app: its files arrive one by one, then `folio_folder_end`.
+    #[wasm_bindgen]
+    pub fn folio_folder_begin() {
+        crate::platform::folder_begin();
+    }
+
+    #[wasm_bindgen]
+    pub fn folio_folder_file(rel: String, data: Vec<u8>, mtime: f64) {
+        crate::platform::folder_file(rel, data, mtime as u64);
+    }
+
+    #[wasm_bindgen]
+    pub fn folio_folder_end() {
+        crate::platform::folder_end(&crate::store::default_workspace());
+    }
+
+    /// Which folder the notes are in, and whether changes are saved there.
+    #[wasm_bindgen]
+    pub fn folio_folder_state(name: String, mode: u8, can_write: bool, provider: String, status: String) {
+        crate::platform::set_folder_state(crate::platform::FolderState { name, mode, can_write, provider, status });
+    }
+
+    /// Which cloud services have an app key in web/config.js.
+    #[wasm_bindgen]
+    pub fn folio_cloud_config(dropbox: bool, onedrive: bool, google: bool) {
+        crate::platform::set_cloud_ready([dropbox, onedrive, google]);
+    }
+
+    /// True while some change has not been saved yet (the page warns before closing).
+    #[wasm_bindgen]
+    pub fn folio_has_unsaved() -> bool {
+        crate::platform::unsaved()
+    }
+
+    /// A file changed in the linked folder (for example synced by Google Drive).
+    #[wasm_bindgen]
+    pub fn folio_external_put(path: String, data: Vec<u8>, mtime: f64) {
+        crate::vfs::external_put(path, data, mtime as u64);
+    }
+
+    #[wasm_bindgen]
+    pub fn folio_external_remove(path: String) {
+        crate::vfs::external_remove(&path);
+    }
+
     /// True when a tap at (x, y) lands on a text field (to open the keyboard right away).
     #[wasm_bindgen]
     pub fn folio_editable_at(x: f32, y: f32) -> bool {

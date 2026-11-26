@@ -47,6 +47,11 @@ pub struct App {
     /// Phone-sized window: sidebar slides over the page, tighter margins.
     pub narrow: bool,
     first_frame: bool,
+    /// The "save before closing?" question is showing.
+    ask_close: bool,
+    /// The person answered it: close now (saving unless `discard`).
+    close_ok: bool,
+    discard: bool,
 }
 
 impl App {
@@ -92,6 +97,9 @@ impl App {
             history: Vec::new(),
             swipe_start: None,
             first_frame: true,
+            ask_close: false,
+            close_ok: false,
+            discard: false,
         };
         if let Some(id) = current {
             app.open_page(&id);
@@ -124,6 +132,13 @@ impl App {
                 if let Some(kind) = kind {
                     app.ed.menu = Some(editor::Menu { kind, pos, frame: 1_000_000 });
                 }
+            }
+            if std::env::var("FOLIO_SHOT_CLOSE").is_ok() {
+                // Show the "save before closing?" question with a change not saved yet.
+                if let Some(id) = app.current.clone() {
+                    app.ws.touch(&id, 1e12);
+                }
+                app.ask_close = true;
             }
             if std::env::var("FOLIO_SHOT_FILTER").is_ok() {
                 for e in &mut app.ws.entries {
@@ -283,6 +298,62 @@ impl App {
         }
     }
 
+    /// "Save changes before closing?"
+    fn close_dialog(&mut self, ctx: &egui::Context, now: f64, c: &theme::Colors) {
+        let unsaved = self.ws.has_unsaved();
+        let mut choice: Option<u8> = None; // 0 save+close, 1 close without saving, 2 cancel
+        let modal = egui::Modal::new(egui::Id::new("close_dialog")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.add_space(4.0);
+            let title = if unsaved { "Save changes before closing?" } else { "Close Folio?" };
+            ui.label(egui::RichText::new(title).size(18.0).family(theme::bold()).color(c.text));
+            ui.add_space(6.0);
+            let body = if unsaved {
+                "Some changes have not been written to your notes folder yet."
+            } else {
+                "All your changes are saved in your notes folder."
+            };
+            ui.label(egui::RichText::new(body).color(c.text2));
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                let primary = egui::Button::new(egui::RichText::new(if unsaved { "Save and close" } else { "Close" }).color(egui::Color32::WHITE)).fill(c.accent);
+                if ui.add(primary).clicked() {
+                    choice = Some(0);
+                }
+                if unsaved && ui.button("Close without saving").clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Cancel").clicked() {
+                    choice = Some(2);
+                }
+            });
+            ui.add_space(6.0);
+            let mut ask = self.settings.confirm_close;
+            if !unsaved && ui.checkbox(&mut ask, "Ask every time I close after editing").changed() {
+                self.settings.confirm_close = ask;
+            }
+        });
+        if modal.should_close() && choice.is_none() {
+            choice = Some(2);
+        }
+        match choice {
+            Some(0) => {
+                self.ws.flush(now, true);
+                self.close_ok = true;
+                self.ask_close = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(1) => {
+                self.discard = true;
+                self.close_ok = true;
+                self.ask_close = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(_) => self.ask_close = false,
+            None => {}
+        }
+    }
+
     fn screenshot_tick(&mut self, ctx: &egui::Context) {
         let Some(shot) = &mut self.shot else { return };
         ctx.request_repaint();
@@ -326,7 +397,9 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        self.ws.flush(0.0, true);
+        if !self.discard {
+            self.ws.flush(0.0, true);
+        }
         if let Some(dir) = self.shot.as_ref().and_then(|_| self.ws.root.parent().map(|p| p.to_path_buf())) {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -366,6 +439,27 @@ impl eframe::App for App {
         let now = ctx.input(|i| i.time);
         let c = theme::colors(self.settings.dark);
         crate::platform::clear_keyboard_zones();
+
+        // A folder was picked in the web app: its files replaced the notes, read them again.
+        if crate::platform::take_reload() {
+            let root = self.ws.root.clone();
+            let mut ws = store::Workspace::open(root);
+            if ws.entries.is_empty() {
+                ws.seed_welcome();
+            }
+            let pages = ws.entries.len();
+            self.ws = ws;
+            self.textures.clear();
+            self.history.clear();
+            self.current = None;
+            if let Some(id) = self.ws.children("").first().map(|p| p.id.clone()) {
+                self.open_page(&id);
+            }
+            self.history.clear();
+            let st = crate::platform::folder_state();
+            let name = if st.name.is_empty() { "the folder".to_string() } else { format!("\"{}\"", st.name) };
+            self.set_status(format!("Opened {name} ({pages} pages)"), ctx.input(|i| i.time));
+        }
 
         let screen = ctx.content_rect();
         self.narrow = screen.width() < NARROW;
@@ -481,11 +575,25 @@ impl eframe::App for App {
         if self.ws.has_unsaved() {
             ctx.request_repaint_after(std::time::Duration::from_millis(300));
         }
+        crate::platform::set_unsaved(self.ws.has_unsaved());
         if ctx.input(|i| i.viewport().close_requested()) {
-            self.ws.flush(now, true);
-            if self.shot.is_none() {
-                self.settings.save();
+            let unsaved = self.ws.has_unsaved();
+            let edited = self.ws.edits > 0;
+            let ask = self.shot.is_none() && !self.close_ok && (unsaved || (edited && self.settings.confirm_close));
+            if ask {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.ask_close = true;
+            } else {
+                if !self.discard {
+                    self.ws.flush(now, true);
+                }
+                if self.shot.is_none() {
+                    self.settings.save();
+                }
             }
+        }
+        if self.ask_close {
+            self.close_dialog(&ctx, now, &c);
         }
         self.screenshot_tick(&ctx);
     }

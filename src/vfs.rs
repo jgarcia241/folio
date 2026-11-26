@@ -147,6 +147,29 @@ mod imp {
         FILES.with(|f| f.borrow_mut().insert(key(Path::new(&path)), (data, mtime)));
     }
 
+    /// A file changed outside the app (in the linked folder): update the copy
+    /// without telling the page's script again.
+    pub fn external_put(path: String, data: Vec<u8>, mtime: u64) {
+        preload(path, data, mtime);
+    }
+
+    pub fn external_remove(path: &str) {
+        FILES.with(|f| f.borrow_mut().remove(&key(Path::new(path))));
+    }
+
+    /// Replace everything under `root` with `files` (paths relative to root),
+    /// quietly: the page's script stores the same files itself.
+    pub fn replace_root(root: &Path, files: Vec<(String, Vec<u8>, u64)>) {
+        let pre = format!("{}/", key(root));
+        FILES.with(|f| {
+            let mut f = f.borrow_mut();
+            f.retain(|k, _| !k.starts_with(&pre));
+            for (rel, data, mt) in files {
+                f.insert(format!("{pre}{}", rel.trim_start_matches('/')), (data, mt));
+            }
+        });
+    }
+
     /// Replace a file from the outside (import) and save it.
     pub fn read(p: &Path) -> io::Result<Vec<u8>> {
         FILES.with(|f| f.borrow().get(&key(p)).map(|(d, _)| d.clone())).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"))

@@ -26,100 +26,9 @@
   <canvas id="folio_canvas"></canvas>
   <div id="folio_loading">Loading Folio…</div>
 
-  <script>
-    // ---------------------------------------------------------------------------
-    // Storage: every note file lives in this device's IndexedDB, so the app works
-    // with no connection at all. The Rust app keeps an in-memory copy and calls
-    // folioHost.put / folioHost.remove after each change.
-    // ---------------------------------------------------------------------------
-    (function () {
-      const DB_NAME = "folio", STORE = "files";
-      const dbReady = new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, 1);
-        req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-      });
-
-      const pending = new Map();
-      let timer = null;
-      function schedule() { if (!timer) timer = setTimeout(flush, 40); }
-      async function flush() {
-        timer = null;
-        if (pending.size === 0) return;
-        const db = await dbReady;
-        const items = [...pending];
-        pending.clear();
-        const tx = db.transaction(STORE, "readwrite");
-        const st = tx.objectStore(STORE);
-        for (const [key, value] of items) {
-          if (value === null) st.delete(key); else st.put(value, key);
-        }
-      }
-      // Save right away when the app goes to the background or is closed.
-      document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); });
-      window.addEventListener("pagehide", flush);
-
-      async function loadAll() {
-        const db = await dbReady;
-        return new Promise((resolve, reject) => {
-          const out = [];
-          const req = db.transaction(STORE, "readonly").objectStore(STORE).openCursor();
-          req.onsuccess = () => {
-            const c = req.result;
-            if (c) { out.push([c.key, c.value]); c.continue(); } else resolve(out);
-          };
-          req.onerror = () => reject(req.error);
-        });
-      }
-
-      window.folioHost = {
-        loadAll,
-        put(path, data, mtime) {
-          // `data` is a view into the app's memory: copy it.
-          pending.set(path, { data: new Uint8Array(data), mtime });
-          schedule();
-        },
-        remove(path) { pending.set(path, null); schedule(); },
-
-        // Choose files (Files app, Photos, iCloud Drive, Google Drive, OneDrive...).
-        pick(id, accept, multiple) {
-          const input = document.createElement("input");
-          input.type = "file";
-          input.accept = accept;
-          input.multiple = multiple;
-          input.style.display = "none";
-          document.body.appendChild(input);
-          input.addEventListener("change", async () => {
-            for (const f of input.files) {
-              const bytes = new Uint8Array(await f.arrayBuffer());
-              window.folioWasm.folio_picked(id, f.name, bytes);
-            }
-            input.remove();
-          });
-          input.click();
-        },
-
-        // Export: the share sheet on iPhone/iPad ("Save to Files"), a download elsewhere.
-        async share(name, data, mime) {
-          const blob = new Blob([new Uint8Array(data)], { type: mime });
-          const file = new File([blob], name, { type: mime });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try { await navigator.share({ files: [file], title: name }); return; }
-            catch (e) { if (e && e.name === "AbortError") return; }
-          }
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = name;
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
-        },
-
-        openUrl(url) { window.open(url, "_blank", "noopener"); },
-      };
-    })();
-  </script>
+  <!-- Cloud service app keys (Dropbox / OneDrive / Google Drive), then storage + sync. -->
+  <script src="config.js"></script>
+  <script src="sync.js"></script>
 
   <script type="module">
     import init, * as wasm from "./folio.js";
@@ -133,6 +42,9 @@
       const touch = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
       wasm.folio_start("folio_canvas", touch);
       document.getElementById("folio_loading").classList.add("hidden");
+
+      // Finish a cloud sign-in that just returned, or reopen the folder / cloud service used last time.
+      window.folioHost.start().catch((e) => console.warn("sync:", e));
 
       // iPhone/iPad keyboard: shrink the app to the visible area so the text being
       // typed is never hidden behind the keyboard.

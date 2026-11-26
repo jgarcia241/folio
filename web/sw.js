@@ -5,6 +5,8 @@ const CACHE = "folio-__VERSION__";
 const ASSETS = [
   "./",
   "./index.html",
+  "./config.js",
+  "./sync.js",
   "./folio.js",
   "./folio_bg.wasm",
   "./manifest.webmanifest",

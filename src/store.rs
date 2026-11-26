@@ -45,6 +45,8 @@ pub struct Entry {
 
 pub struct Workspace {
     pub root: PathBuf,
+    /// Counts edits since the workspace was opened (for "ask before closing").
+    pub edits: u64,
     pub entries: Vec<Entry>,
     index: HashMap<String, usize>,
     pub last_error: Option<String>,
@@ -53,7 +55,7 @@ pub struct Workspace {
 impl Workspace {
     pub fn open(root: PathBuf) -> Self {
         let _ = fs::create_dir_all(&root);
-        let mut ws = Workspace { root, entries: Vec::new(), index: HashMap::new(), last_error: None };
+        let mut ws = Workspace { root, edits: 0, entries: Vec::new(), index: HashMap::new(), last_error: None };
         ws.full_scan();
         ws
     }
@@ -312,9 +314,28 @@ impl Workspace {
     }
 
     /// Where page `idx` should live: "<folder>/<Title>.md", with " 2", " 3"... on clashes.
+    /// A folder that belongs to a page ("Keep sub-pages in a folder").
+    fn is_page_folder(&self, d: &Path) -> bool {
+        let owner = d.with_extension("md");
+        self.entries.iter().any(|o| o.path == owner || (o.page.folder && !o.path.as_os_str().is_empty() && o.path.with_extension("") == d))
+    }
+
     fn path_for_idx(&self, idx: usize, depth: usize) -> PathBuf {
         let e = &self.entries[idx];
-        let dir = self.children_dir(&e.page.parent, depth + 1);
+        let mut dir = self.children_dir(&e.page.parent, depth + 1);
+        // A page in a folder the person made themselves stays where it is
+        // (unless the app means to put it into a page's folder).
+        if let Some(cur) = e.path.parent() {
+            if !e.path.as_os_str().is_empty()
+                && cur != dir
+                && cur != self.root
+                && cur.starts_with(&self.root)
+                && !self.is_page_folder(cur)
+                && !self.is_page_folder(&dir)
+            {
+                dir = cur.to_path_buf();
+            }
+        }
         let base = sanitize(e.page.display_title());
         // Keep the current name if it still matches the title.
         if e.path.parent() == Some(dir.as_path()) {
@@ -415,6 +436,7 @@ impl Workspace {
     }
 
     pub fn touch(&mut self, id: &str, now: f64) {
+        self.edits += 1;
         if let Some(e) = self.get_mut(id) {
             e.dirty = true;
             e.last_edit = now;
@@ -691,6 +713,8 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     pub dark: bool,
     pub sidebar_width: f32,
+    /// Ask before closing the app after editing (even when everything is saved).
+    pub confirm_close: bool,
 }
 
 pub fn settings_path() -> PathBuf {
@@ -720,7 +744,7 @@ pub fn default_workspace() -> PathBuf {
 
 impl Settings {
     pub fn load() -> Self {
-        let mut s = Settings { workspace: None, recent: Vec::new(), dark: false, sidebar_width: 240.0 };
+        let mut s = Settings { workspace: None, recent: Vec::new(), dark: false, sidebar_width: 240.0, confirm_close: true };
         if let Ok(txt) = fs::read_to_string(&settings_path()) {
             for line in txt.lines() {
                 if let Some((k, v)) = line.split_once('=') {
@@ -729,6 +753,7 @@ impl Settings {
                         "recent" => s.recent.push(PathBuf::from(v)),
                         "dark" => s.dark = v == "true",
                         "sidebar" => s.sidebar_width = v.parse().unwrap_or(240.0),
+                        "confirm_close" => s.confirm_close = v != "false",
                         _ => {}
                     }
                 }
@@ -749,7 +774,7 @@ impl Settings {
         for r in &self.recent {
             out.push_str(&format!("recent={}\n", r.display()));
         }
-        out.push_str(&format!("dark={}\nsidebar={}\n", self.dark, self.sidebar_width));
+        out.push_str(&format!("dark={}\nsidebar={}\nconfirm_close={}\n", self.dark, self.sidebar_width, self.confirm_close));
         let _ = fs::write_atomic(&p, out.as_bytes());
     }
 
@@ -846,4 +871,125 @@ mod tests {
         let _ = fs::remove_dir_all(&a);
         let _ = fs::remove_dir_all(&b);
     }
+
+    #[test]
+    fn own_folders_are_kept() {
+        let dir = std::env::temp_dir().join(format!("folio-own-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Ideas")).unwrap();
+        fs::write(dir.join("Ideas/Child.md"), "# Child page\n\n- one\n").unwrap();
+        let mut ws = Workspace::open(dir.clone());
+        ws.flush(1e9, true); // gives the plain file its header
+        assert!(dir.join("Ideas/Child page.md").exists(), "stays in the person's own folder");
+        assert!(!dir.join("Child page.md").exists());
+        // A page with "Keep sub-pages in a folder" still gathers its sub-pages.
+        let p = ws.create("Projects", "", 0.0);
+        let c = ws.create("Alpha", &p, 0.0);
+        ws.set_folder(&p, true, 0.0);
+        ws.flush(1e9, true);
+        assert_eq!(ws.get(&c).unwrap().path, dir.join("Projects/Alpha.md"));
+        ws.set_folder(&p, false, 0.0);
+        ws.flush(1e9, true);
+        assert_eq!(ws.get(&c).unwrap().path, dir.join("Alpha.md"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+// ------------------------------------------------------------------ cloud sync folders (desktop)
+
+/// The cloud services Folio can store notes with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cloud {
+    Dropbox,
+    OneDrive,
+    GoogleDrive,
+}
+
+impl Cloud {
+    pub const ALL: [Cloud; 3] = [Cloud::Dropbox, Cloud::OneDrive, Cloud::GoogleDrive];
+    pub fn name(self) -> &'static str {
+        match self {
+            Cloud::Dropbox => "Dropbox",
+            Cloud::OneDrive => "OneDrive",
+            Cloud::GoogleDrive => "Google Drive",
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            Cloud::Dropbox => "dropbox",
+            Cloud::OneDrive => "onedrive",
+            Cloud::GoogleDrive => "google",
+        }
+    }
+    /// Where the web app keeps the notes inside the service, so the desktop app
+    /// and the web app use the same folder.
+    pub fn notes_subfolder(self) -> &'static str {
+        match self {
+            Cloud::Dropbox | Cloud::OneDrive => "Apps/Folio",
+            Cloud::GoogleDrive => "Folio Notes",
+        }
+    }
+}
+
+/// The folder the service's desktop app syncs (Dropbox, OneDrive, Google Drive for desktop).
+pub fn cloud_sync_root(cloud: Cloud) -> Option<PathBuf> {
+    if cfg!(target_arch = "wasm32") {
+        return None;
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
+    let storage = home.join("Library/CloudStorage");
+    let in_storage = |prefix: &str| -> Option<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(&storage)
+            .ok()?
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(prefix))
+            .map(|e| e.path())
+            .collect();
+        found.sort();
+        found.into_iter().next()
+    };
+    let existing = |p: PathBuf| if p.is_dir() { Some(p) } else { None };
+    match cloud {
+        Cloud::Dropbox => in_storage("Dropbox").or_else(|| existing(home.join("Dropbox"))),
+        Cloud::OneDrive => in_storage("OneDrive")
+            .or_else(|| std::env::var_os("OneDrive").map(PathBuf::from).and_then(existing))
+            .or_else(|| existing(home.join("OneDrive"))),
+        Cloud::GoogleDrive => {
+            // macOS: ~/Library/CloudStorage/GoogleDrive-<account>/My Drive (name is translated
+            // in some languages, e.g. "Mi unidad"); Windows: G:\My Drive.
+            let account = in_storage("GoogleDrive-");
+            if let Some(acc) = account {
+                let mut dirs: Vec<PathBuf> = std::fs::read_dir(&acc).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+                dirs.sort();
+                let preferred = ["My Drive", "Mi unidad", "Meine Ablage", "Mon Drive", "Il mio Drive", "Meu Drive"];
+                return dirs
+                    .iter()
+                    .find(|d| preferred.iter().any(|n| d.file_name().map(|f| f == *n).unwrap_or(false)))
+                    .cloned()
+                    .or_else(|| dirs.into_iter().find(|d| !d.file_name().map(|f| f.to_string_lossy().starts_with('.')).unwrap_or(true)));
+            }
+            existing(PathBuf::from("G:\\My Drive")).or_else(|| existing(home.join("Google Drive")))
+        }
+    }
+}
+
+/// Copy every file of one notes folder into another (used when moving the notes
+/// into an empty cloud folder).
+pub fn copy_notes(from: &Path, to: &Path) -> usize {
+    let mut n = 0;
+    for p in fs::list_all(from) {
+        if let (Ok(rel), Ok(bytes)) = (p.strip_prefix(from), fs::read(&p)) {
+            if fs::write_atomic(&to.join(rel), &bytes).is_ok() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// The notes folder inside a cloud service's synced folder (created if needed).
+pub fn cloud_notes_folder(cloud: Cloud) -> Option<PathBuf> {
+    let root = cloud_sync_root(cloud)?;
+    let dir = root.join(cloud.notes_subfolder());
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }

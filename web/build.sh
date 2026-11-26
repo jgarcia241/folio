@@ -31,7 +31,7 @@ if command -v wasm-opt >/dev/null; then
 fi
 
 echo "==> Copying page, manifest, icons and offline worker"
-cp web/index.html web/manifest.webmanifest "$OUT/"
+cp web/index.html web/manifest.webmanifest web/config.js web/sync.js "$OUT/"
 cp web/icons/*.png "$OUT/icons/"
 VERSION=$(date +%Y%m%d%H%M%S)
 sed "s/__VERSION__/$VERSION/" web/sw.js > "$OUT/sw.js"

@@ -21,6 +21,75 @@ pub struct Picked {
 }
 
 static PICKED: Mutex<Vec<Picked>> = Mutex::new(Vec::new());
+
+/// Web: the folder the notes live in (see `web/index.html`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FolderState {
+    /// Folder name as shown in Files / the file picker ("" = notes only on this device).
+    pub name: String,
+    /// 0 = none, 1 = linked (changes are saved in the folder), 2 = read from Files
+    /// (iPhone/iPad: Safari can't save into it), 3 = linked but needs a tap to reconnect.
+    pub mode: u8,
+    /// The browser can save straight into a folder (File System Access).
+    pub can_write: bool,
+    /// "Dropbox", "OneDrive", "Google Drive", or "" for a folder on the device.
+    pub provider: String,
+    /// Short sync status, e.g. "Synced" or "Offline · 2 changes waiting".
+    pub status: String,
+}
+
+/// Which cloud services have an app key in `web/config.js` (Dropbox, OneDrive, Google Drive).
+static CLOUD_READY: Mutex<[bool; 3]> = Mutex::new([false; 3]);
+static UNSAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_cloud_ready(r: [bool; 3]) {
+    *CLOUD_READY.lock().unwrap() = r;
+}
+pub fn cloud_ready() -> [bool; 3] {
+    *CLOUD_READY.lock().unwrap()
+}
+/// The app has changes not written yet (asked by the web page before it closes).
+pub fn set_unsaved(on: bool) {
+    UNSAVED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn unsaved() -> bool {
+    UNSAVED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static FOLDER: Mutex<Option<FolderState>> = Mutex::new(None);
+/// Set when a folder's files replaced the notes: the app must re-read them.
+static RELOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static INCOMING: Mutex<Vec<(String, Vec<u8>, u64)>> = Mutex::new(Vec::new());
+
+pub fn folder_state() -> FolderState {
+    FOLDER.lock().unwrap().clone().unwrap_or_default()
+}
+
+pub fn set_folder_state(st: FolderState) {
+    *FOLDER.lock().unwrap() = Some(st);
+}
+
+pub fn take_reload() -> bool {
+    RELOAD.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn folder_begin() {
+    INCOMING.lock().unwrap().clear();
+}
+
+pub fn folder_file(rel: String, bytes: Vec<u8>, mtime: u64) {
+    INCOMING.lock().unwrap().push((rel, bytes, mtime));
+}
+
+/// All files of the chosen folder arrived: swap them in.
+pub fn folder_end(root: &std::path::Path) {
+    let files = std::mem::take(&mut *INCOMING.lock().unwrap());
+    #[cfg(target_arch = "wasm32")]
+    crate::vfs::replace_root(root, files);
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (root, files);
+    RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+}
 static PENDING: Mutex<Vec<(u32, PickKind)>> = Mutex::new(Vec::new());
 /// Screen areas (in points) where a tap should bring up the keyboard.
 static KEYBOARD_ZONES: Mutex<Vec<[f32; 4]>> = Mutex::new(Vec::new());
@@ -91,6 +160,12 @@ mod imp {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
 
+    pub fn connect_cloud(_kind: &str) {}
+    pub fn sync_now() {}
+    pub fn choose_notes_folder() {}
+    pub fn reconnect_notes_folder() {}
+    pub fn forget_notes_folder() {}
+
     pub fn reveal(path: &std::path::Path) {
         #[cfg(target_os = "macos")]
         {
@@ -130,6 +205,35 @@ mod imp {
         fn js_share(name: &str, data: &[u8], mime: &str);
         #[wasm_bindgen(js_namespace = folioHost, js_name = openUrl)]
         fn js_open_url(url: &str);
+        #[wasm_bindgen(js_namespace = folioHost, js_name = pickFolder)]
+        fn js_pick_folder();
+        #[wasm_bindgen(js_namespace = folioHost, js_name = reconnectFolder)]
+        fn js_reconnect_folder();
+        #[wasm_bindgen(js_namespace = folioHost, js_name = forgetFolder)]
+        fn js_forget_folder();
+        #[wasm_bindgen(js_namespace = folioHost, js_name = connectCloud)]
+        fn js_connect_cloud(kind: &str);
+        #[wasm_bindgen(js_namespace = folioHost, js_name = syncNow)]
+        fn js_sync_now();
+    }
+
+    /// Sign in to Dropbox / OneDrive / Google Drive ("dropbox", "onedrive", "google").
+    pub fn connect_cloud(kind: &str) {
+        js_connect_cloud(kind);
+    }
+    pub fn sync_now() {
+        js_sync_now();
+    }
+
+    /// Choose the folder that holds the notes (Files app / folder picker).
+    pub fn choose_notes_folder() {
+        js_pick_folder();
+    }
+    pub fn reconnect_notes_folder() {
+        js_reconnect_folder();
+    }
+    pub fn forget_notes_folder() {
+        js_forget_folder();
     }
 
     pub fn host_put(path: &str, data: &[u8], mtime: f64) {

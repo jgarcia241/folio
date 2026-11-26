@@ -742,6 +742,18 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
         app.settings.sidebar_width = (ui.available_width() + 12.0).clamp(200.0, 420.0);
     }
 
+    // Web: the linked folder needs a tap before the browser lets the app use it again.
+    if crate::platform::IS_WEB {
+        let st = crate::platform::folder_state();
+        if st.mode == 3 {
+            let text = if st.provider.is_empty() { format!("🔗  Reconnect folder \"{}\"", st.name) } else { format!("🔗  Sign in to {} again", st.provider) };
+            let b = egui::Button::new(RichText::new(text).color(Color32::WHITE).size(14.0)).fill(c.accent).corner_radius(6);
+            if ui.add_sized([ui.available_width(), if theme::touch_ui() { 44.0 } else { 30.0 }], b).on_hover_text("Changes are kept on this device until the folder is reconnected").clicked() {
+                crate::platform::reconnect_notes_folder();
+            }
+            ui.add_space(8.0);
+        }
+    }
     // Search box
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
     crate::platform::keyboard_zone(rect);
@@ -817,7 +829,14 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
 
     // Bottom: workspace switcher
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-        let name = app.ws.name();
+        let st = crate::platform::folder_state();
+        let name = if crate::platform::IS_WEB && !st.provider.is_empty() {
+            format!("{} · {}", st.provider, if st.status.is_empty() { "…".to_string() } else { st.status.clone() })
+        } else if crate::platform::IS_WEB && st.mode != 0 && !st.name.is_empty() {
+            st.name.clone()
+        } else {
+            app.ws.name()
+        };
         let (rect, resp) = row(ui, false, &c, 32.0);
         {
             let p = ui.painter();
@@ -829,8 +848,71 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
         row_label(ui, rect, 30.0, "", &format!("{name}  ⌄"), c.text, false);
         egui::Popup::menu(&resp).width(280.0).align(egui::RectAlign::TOP_START).show(|ui| {
             if crate::platform::IS_WEB {
-                ui.label(RichText::new("Your notes are saved on this device and work offline.").size(11.0).color(c.text3));
-                ui.label(RichText::new("Import and export to move them to and from the Files app, Google Drive or OneDrive.").size(11.0).color(c.text3));
+                let st = crate::platform::folder_state();
+                let cloud = !st.provider.is_empty();
+                match st.mode {
+                    1 if cloud => {
+                        ui.label(RichText::new(format!("☁ Notes are saved in {} ({}).", st.provider, st.name)).size(12.0).color(c.text2));
+                        ui.label(RichText::new(format!("{} — changes upload in the background; edits made offline upload when you're back online.", st.status)).size(11.0).color(c.text3));
+                    }
+                    3 if cloud => {
+                        ui.label(RichText::new(format!("☁ Sign in to {} again to keep syncing.", st.provider)).size(12.0).color(c.text2));
+                        ui.label(RichText::new("Your changes are kept on this device meanwhile.").size(11.0).color(c.text3));
+                    }
+                    1 => {
+                        ui.label(RichText::new(format!("📂 Notes are saved in the folder \"{}\".", st.name)).size(12.0).color(c.text2));
+                        ui.label(RichText::new("Every change is written there right away, and changes made in the folder show up here.").size(11.0).color(c.text3));
+                    }
+                    2 => {
+                        ui.label(RichText::new(format!("📂 Notes were read from the folder \"{}\".", st.name)).size(12.0).color(c.text2));
+                        ui.label(RichText::new("Safari on iPhone and iPad can read a folder from Files but can't save into it. Your changes are kept on this device; use Export to save them back to Files.").size(11.0).color(c.text3));
+                    }
+                    3 => {
+                        ui.label(RichText::new(format!("📂 Folder \"{}\" needs to be reconnected.", st.name)).size(12.0).color(c.text2));
+                    }
+                    _ => {
+                        ui.label(RichText::new("Your notes are saved on this device and work offline.").size(11.0).color(c.text3));
+                    }
+                }
+                ui.separator();
+                if st.mode == 3 && ui.button(if cloud { format!("🔗  Sign in to {} again", st.provider) } else { format!("🔗  Reconnect \"{}\"", st.name) }).clicked() {
+                    crate::platform::reconnect_notes_folder();
+                }
+                if cloud && st.mode == 1 && ui.button("⟳  Sync now").clicked() {
+                    crate::platform::sync_now();
+                }
+                // Cloud services (need an app key in web/config.js, see the README).
+                ui.label(RichText::new("Cloud services").size(11.0).color(c.text3));
+                let ready = crate::platform::cloud_ready();
+                for (i, cl) in crate::store::Cloud::ALL.iter().enumerate() {
+                    let connected = cloud && st.provider == cl.name();
+                    let label = if connected { format!("✔  {} connected", cl.name()) } else { format!("☁  Connect {}", cl.name()) };
+                    let hint = if ready[i] {
+                        format!("Sign in once; every page is then saved in your {} (folder {}).", cl.name(), cl.notes_subfolder())
+                    } else {
+                        format!("{} is not set up yet: add its app key to web/config.js (see the README, \"Cloud services\").", cl.name())
+                    };
+                    if ui.add_enabled(ready[i] && !connected, egui::Button::new(label)).on_hover_text(&hint).on_disabled_hover_text(&hint).clicked() {
+                        crate::platform::connect_cloud(cl.key());
+                    }
+                }
+                ui.separator();
+                let label = if st.can_write {
+                    if st.mode == 1 { "📂  Use a different folder…" } else { "📂  Use a folder for my notes…" }
+                } else {
+                    "📂  Open a folder from Files…"
+                };
+                let hint = if st.can_write {
+                    "Pick a folder (for example inside Google Drive or OneDrive): every page is saved there as a .md file"
+                } else {
+                    "Loads all pages and pictures from a folder in Files. Safari can't save back into it: use Export."
+                };
+                if ui.button(label).on_hover_text(hint).clicked() {
+                    crate::platform::choose_notes_folder();
+                }
+                if st.mode != 0 && ui.button(if cloud { format!("✕  Disconnect {}", st.provider) } else { "✕  Stop using this folder".to_string() }).on_hover_text("Keep the notes on this device only").clicked() {
+                    crate::platform::forget_notes_folder();
+                }
             } else {
                 ui.label(RichText::new("Your notes are saved in").size(11.0).color(c.text3));
                 ui.label(RichText::new(app.ws.root.display().to_string()).size(11.0).color(c.text2));
@@ -870,6 +952,28 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
                     reveal(&app.ws.root);
                 }
                 ui.separator();
+                ui.label(RichText::new("Keep notes in a cloud service").size(11.0).color(c.text3));
+                for cloud in crate::store::Cloud::ALL {
+                    let root = crate::store::cloud_sync_root(cloud);
+                    let label = format!("☁  Use {} folder", cloud.name());
+                    let hint = match &root {
+                        Some(r) => format!("Saves notes in {}/{} — the {} app syncs them to your other devices and the web app", r.display(), cloud.notes_subfolder(), cloud.name()),
+                        None => format!("Install the {} desktop app first, then choose this again", cloud.name()),
+                    };
+                    if ui.add_enabled(root.is_some(), egui::Button::new(label)).on_hover_text(&hint).on_disabled_hover_text(&hint).clicked() {
+                        if let Some(dir) = crate::store::cloud_notes_folder(cloud) {
+                            // An empty cloud folder gets the notes you already have.
+                            let empty = crate::vfs::list_md(&dir).is_empty();
+                            if empty && dir != app.ws.root {
+                                app.ws.flush(0.0, true);
+                                crate::store::copy_notes(&app.ws.root.clone(), &dir);
+                            }
+                            app.switch_workspace(dir);
+                            app.set_status(format!("Notes are now in {}", cloud.name()), ui.input(|i| i.time));
+                        }
+                    }
+                }
+                ui.separator();
             }
             let mut dark = app.settings.dark;
             if ui.checkbox(&mut dark, "Dark mode").changed() {
@@ -878,6 +982,9 @@ pub fn sidebar(app: &mut App, ui: &mut Ui, now: f64) {
                 app.settings.save();
             }
             ui.checkbox(&mut app.full_width, "Full width pages");
+            if !crate::platform::IS_WEB && ui.checkbox(&mut app.settings.confirm_close, "Ask before closing").changed() {
+                app.settings.save();
+            }
         });
         if let Some(err) = &app.ws.last_error {
             ui.label(RichText::new(err).color(Color32::from_rgb(220, 70, 70)).size(11.0));

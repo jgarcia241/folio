@@ -108,8 +108,22 @@ leaves the phone.
     Tap ⏵ to expand a page, use ··· / + on the open page, or press and hold any page for
     its menu (favorite, duplicate, move up/down, folder, trash).
   - **Back:** the ‹ button next to ☰ returns to the page you came from.
-- **Reading and writing files.** iOS does not let web apps open a folder directly, so
-  files go in and out through the Files app (which includes iCloud Drive, Google
+- **A folder for your notes** (workspace menu, bottom left):
+  - **Chrome / Edge on a computer, Chrome on Android:** *Use a folder for my notes…* —
+    pick any folder (for example inside Google Drive or OneDrive). Every page is saved
+    there as a `.md` file, pictures in `_assets/`, sub-folders are kept, and changes made in
+    the folder (synced from another device, edited in another app) show up within a few
+    seconds. If the folder is empty, the notes already in the app are moved into it. The
+    folder is remembered; if the browser asks again later, tap **Reconnect folder** at the
+    top of the sidebar (edits made meanwhile are written to the folder first).
+  - **Safari on iPhone / iPad (iOS 18.4+):** *Open a folder from Files…* loads all pages and
+    pictures from a folder (iCloud Drive, Google Drive, OneDrive, On My iPhone…), keeping
+    its sub-folders. **Safari does not let web apps save into a folder**, so your changes
+    stay on the device; use *Export everything as .zip…* → **Save to Files** to write them
+    back. See [Saving automatically on iPhone / iPad](#saving-automatically-on-iphone--ipad)
+    for the options.
+  - The notes are always also kept on the device, so the app works offline either way.
+- **Other ways to move files** (through the Files app, which includes iCloud Drive, Google
   Drive and OneDrive):
   - *Import notes or pictures…* (workspace menu, bottom left) reads `.md` pages,
     pictures, or a **`.zip` of a whole notes folder** (for example the desktop app's folder).
@@ -146,6 +160,110 @@ also uses it to make the download smaller (optional). .
 `python3 -m http.server 8080 --directory web/dist`, and open <http://localhost:8080>
 (opening `index.html` straight from disk does not work: browsers only allow the offline
 cache over `http://localhost` or `https://`).
+
+### Saving automatically on iPhone / iPad
+
+Safari gives web apps no way to write into a folder in the Files app, so on iPhone and
+iPad the web app keeps your notes on the device and you save them back with *Export*.
+These are the ways around that, from least to most work:
+
+| Approach | Saves on its own? | Works offline? | Needs |
+| --- | --- | --- | --- |
+| **Export → Save to Files** (built in) | No, one tap + choose folder | Yes | Nothing |
+| **Shortcuts app** bridge | Almost: one tap, then iOS runs a Shortcut that unzips into a fixed Files folder (iCloud Drive, Google Drive, OneDrive…) | Yes | A personal Shortcut on each device; the app would hand it the notes |
+| **Google Drive / OneDrive / Dropbox connection** (built in, see [Cloud services](#cloud-services)) | Yes, in the background while the app is open | Edits queue offline and upload when online | Signing in to that service, and a free app registration with Google / Microsoft / Dropbox for this web address |
+| **Native app** (same Rust code wrapped for iOS) | Yes, straight into any Files folder, like the desktop app | Yes | An Apple developer account ($99/year) to install through TestFlight or the App Store |
+
+Notes:
+
+- A native iPhone app **cannot be installed from a web page**: it must come from the App
+  Store, TestFlight (an invite link; builds expire after 90 days), or be installed from a
+  Mac with Xcode (a free Apple ID keeps it working for 7 days). Apple's EU "web
+  distribution" is only open to developers with a large existing app.
+- On **Android, Chrome** and on computers (**Chrome / Edge**), *Use a folder for my notes…*
+  already saves straight into a folder, so no workaround is needed there.
+
+#### What about iCloud Drive?
+
+- **On a Mac it just works:** in the desktop app choose *Open or create a folder…* and pick
+  a folder inside **iCloud Drive** (or use *Use a folder for my notes…* in Chrome / Edge).
+  Every page is a `.md` file there, so it appears on your iPhone / iPad in the **Files** app
+  under iCloud Drive.
+- **On iPhone / iPad the web app cannot write into iCloud Drive.** Apple gives websites no
+  access to iCloud Drive files. Its web toolkit for iCloud (CloudKit JS) stores data in an
+  app's own private iCloud database — not as files you can see in iCloud Drive — and needs
+  a paid Apple developer account.
+- What works on iPhone / iPad today: *Open a folder from Files…* to **read** the iCloud Drive
+  folder (for example the one the Mac app writes to), and *Export → Save to Files →
+  iCloud Drive* to save back. The **Shortcuts** bridge in the table above can also save into
+  iCloud Drive without asking each time, and a **native app** could save there
+  automatically.
+
+### Cloud services
+
+Both versions can keep the notes in **Dropbox**, **OneDrive** or **Google Drive**, and they
+use the same folder so the desktop app and the phone see the same pages:
+
+| Service | Folder used |
+| --- | --- |
+| Dropbox | `Dropbox/Apps/Folio` |
+| OneDrive | `OneDrive/Apps/Folio` |
+| Google Drive | `My Drive/Folio Notes` |
+
+**Desktop app:** install the service's own desktop app (Dropbox, OneDrive, Google Drive for
+desktop), then in Folio open the workspace menu (bottom left) → *Use Dropbox / OneDrive /
+Google Drive folder*. Folio finds the synced folder on your computer; if that folder is empty,
+the notes you already have are copied into it. The service's app does the syncing.
+
+**Web app (iPhone, iPad, any browser):** workspace menu → *Connect Dropbox / OneDrive /
+Google Drive* → sign in. From then on every change is uploaded in the background, changes
+made on other devices come down every ~15 seconds (and whenever you open the app), and edits
+made offline are kept and uploaded when you're back online. The status is shown at the bottom
+of the sidebar ("Dropbox · Synced", "Offline · 2 changes waiting"…). If the service folder is
+empty, the notes on the device are uploaded into it. *Disconnect* keeps the notes on the device.
+
+Each service only lets a web app sign people in once its owner has registered it (free).
+Register once, put the keys in **`web/config.js`**, commit, and the build publishes them.
+Use your web app's address as the redirect URI, exactly, with the final `/` —
+e.g. `https://jgarcia241.github.io/folio/`.
+
+1. **Dropbox** — <https://www.dropbox.com/developers/apps> → *Create app* → *Scoped access* →
+   *App folder* → name it **Folio**. In *Settings* add the redirect URI; in *Permissions* tick
+   `files.content.read` and `files.content.write` and press *Submit*. Copy the **App key**
+   into `dropboxAppKey`.
+2. **OneDrive** — <https://portal.azure.com> → *Microsoft Entra ID* → *App registrations* →
+   *New registration*: name **Folio**, *Accounts in any organizational directory and personal
+   Microsoft accounts*, redirect URI platform **Single-page application (SPA)** with your
+   address. Under *API permissions* add Microsoft Graph → delegated `Files.ReadWrite.AppFolder`
+   and `offline_access`. Copy the **Application (client) ID** into `onedriveClientId`.
+3. **Google Drive** — <https://console.cloud.google.com> → create a project → *APIs & Services*
+   → enable **Google Drive API** → *OAuth consent screen* (External; add yourself as a test
+   user) → *Credentials* → *Create credentials* → *OAuth client ID* → **Web application**;
+   add your address to *Authorized JavaScript origins* (`https://jgarcia241.github.io`) and to
+   *Authorized redirect URIs* (`https://jgarcia241.github.io/folio/`). Copy the **Client ID**
+   into `googleClientId`.
+
+Limits that come from the services, not from Folio:
+
+- **Google Drive:** Google gives apps that run only in the browser a sign-in that lasts about
+  an hour. When it runs out, the sidebar shows *Sign in to Google Drive again*; your edits are
+  kept on the device and uploaded after you sign in (one tap if you're still signed in to
+  Google). Google also shows an "unverified app" notice while the app is in testing.
+- **OneDrive:** Microsoft limits browser-only apps to about a day; then you sign in again the
+  same way.
+- **Dropbox** keeps you signed in until you disconnect.
+- Two devices editing the **same page** at the same moment: the last one saved wins.
+
+### Asking before closing
+
+- **Desktop app:** if a change has not been written yet, closing asks **Save and close /
+  Close without saving / Cancel**. After you have edited something it also asks *Close
+  Folio?* even when everything is saved; turn that off with *Ask before closing* in the
+  workspace menu (or the tick box in the question).
+- **Web app:** pages save on every change. If you close the tab or app while a change is
+  still being saved or uploaded, the browser asks *Leave this page?* first. (iPhone and iPad
+  don't ask when you swipe an app away, but the app saves the moment it goes to the
+  background.)
 
 ### Put it online and install it on iPhone / iPad
 
