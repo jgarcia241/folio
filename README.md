@@ -99,9 +99,15 @@ leaves the phone.
 
 - **Phone layout** below 760 points wide: the sidebar slides over the page (tap ☰),
   tighter margins, compact toolbars. **iPad** gets the full layout with the sidebar.
-- **Touch**: tap a block to edit it (the keyboard opens on the first tap), drag
-  anywhere to scroll, and use the ⋮⋮ handle next to the block you are editing to move it
-  or open its menu.
+- **Touch**, with finger-sized (44-point) buttons and rows:
+  - Tap a block to edit it (the keyboard opens on the first tap, and the page shrinks so
+    the keyboard never covers what you type). Drag anywhere to scroll.
+  - **Move a block:** press and hold it, then drag — or drag the ⋮⋮ handle that stays next
+    to the block you last tapped. Tap ⋮⋮ for turn-into, colours, duplicate and delete.
+  - **Sidebar:** tap ☰ or swipe in from the left edge; swipe left or tap outside to close.
+    Tap ⏵ to expand a page, use ··· / + on the open page, or press and hold any page for
+    its menu (favorite, duplicate, move up/down, folder, trash).
+  - **Back:** the ‹ button next to ☰ returns to the page you came from.
 - **Reading and writing files.** iOS does not let web apps open a folder directly, so
   files go in and out through the Files app (which includes iCloud Drive, Google
   Drive and OneDrive):

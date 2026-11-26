@@ -197,3 +197,38 @@ pub fn tag_color(name: &str) -> u8 {
     }
     1 + (h % 9) as u8
 }
+
+// ------------------------------------------------------------------ touch sizes
+
+static TOUCH_UI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True on touch screens (iPhone / iPad): controls get finger-sized.
+pub fn touch_ui() -> bool {
+    TOUCH_UI.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Switch finger-sized controls on (once per change).
+pub fn set_touch_ui(ctx: &egui::Context, on: bool) {
+    if TOUCH_UI.swap(on, std::sync::atomic::Ordering::Relaxed) == on {
+        return;
+    }
+    ctx.global_style_mut(|s| {
+        use egui::{FontId, TextStyle};
+        if on {
+            s.spacing.button_padding = egui::vec2(12.0, 9.0);
+            s.spacing.interact_size = egui::vec2(44.0, 40.0);
+            s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+            s.spacing.icon_width = 22.0;
+            s.spacing.icon_width_inner = 12.0;
+            s.text_styles.insert(TextStyle::Body, FontId::proportional(16.0));
+            s.text_styles.insert(TextStyle::Button, FontId::proportional(16.0));
+            s.text_styles.insert(TextStyle::Small, FontId::proportional(13.0));
+        } else {
+            s.spacing.button_padding = egui::vec2(6.0, 3.0);
+            s.spacing.item_spacing = egui::vec2(6.0, 2.0);
+            s.text_styles.insert(TextStyle::Body, FontId::proportional(14.0));
+            s.text_styles.insert(TextStyle::Button, FontId::proportional(14.0));
+            s.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
+        }
+    });
+}

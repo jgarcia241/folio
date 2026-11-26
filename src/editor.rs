@@ -26,6 +26,10 @@ pub struct EditorState {
     pub paste_sel: usize,
     pub cover_tab: u8,
     pub db_search: String,
+    /// A long press just opened a menu: ignore the tap that ends it.
+    pub ignore_click: bool,
+    /// Touch screens: the block last tapped keeps its handle visible.
+    pub touch_sel: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -69,6 +73,8 @@ pub fn close_menu(app: &mut App, ctx: &egui::Context) {
 
 /// Draw a floating menu. Returns (contents result, should close).
 pub fn float_menu<R>(ctx: &egui::Context, id: Id, m: &Menu, width: f32, c: &Colors, add: impl FnOnce(&mut Ui) -> R) -> (R, bool) {
+    // Never wider than the screen (phones).
+    let width = width.min(ctx.content_rect().width() - 28.0).max(160.0);
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(m.pos).constrain(true).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
             .fill(c.popup)
@@ -98,12 +104,14 @@ pub fn menu_item(ui: &mut Ui, icon: &str, label: &str, c: &Colors) -> bool {
 }
 
 pub fn menu_item_colored(ui: &mut Ui, icon: &str, label: &str, color: Color32, c: &Colors) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
-    if resp.hovered() {
+    let t = theme::touch_ui();
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), if t { 44.0 } else { 28.0 }), Sense::click());
+    if resp.hovered() || resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(r, 5.0, c.hover);
     }
-    ui.painter().text(pos2(r.left() + 14.0, r.center().y), egui::Align2::CENTER_CENTER, icon, FontId::proportional(14.0), color);
-    ui.painter().text(pos2(r.left() + 30.0, r.center().y), egui::Align2::LEFT_CENTER, label, FontId::proportional(14.0), color);
+    let (fs, x) = if t { (17.0, 36.0) } else { (14.0, 30.0) };
+    ui.painter().text(pos2(r.left() + x / 2.0 - 1.0, r.center().y), egui::Align2::CENTER_CENTER, icon, FontId::proportional(fs), color);
+    ui.painter().text(pos2(r.left() + x, r.center().y), egui::Align2::LEFT_CENTER, label, FontId::proportional(fs), color);
     resp.clicked()
 }
 
@@ -496,8 +504,10 @@ fn cover_picker(app: &mut App, ctx: &egui::Context, page: &mut crate::model::Pag
         match app.ed.cover_tab {
             0 | 1 => {
                 let list = if app.ed.cover_tab == 0 { crate::covers::gallery_indices() } else { crate::covers::color_indices() };
-                let (tw, th) = if app.ed.cover_tab == 0 { (146.0, 64.0) } else { (106.0, 52.0) };
-                let per_row = if app.ed.cover_tab == 0 { 3 } else { 4 };
+                let avail = ui.available_width();
+                let per_row = if app.ed.cover_tab == 0 { if avail < 400.0 { 2 } else { 3 } } else if avail < 400.0 { 3 } else { 4 };
+                let tw = ((avail - 6.0 * (per_row as f32 - 1.0)) / per_row as f32).floor();
+                let th = if app.ed.cover_tab == 0 { tw * 0.44 } else { tw * 0.5 };
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                     egui::Grid::new(("cover_grid", app.ed.cover_tab)).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
                         for (k, idx) in list.iter().enumerate() {
@@ -688,13 +698,23 @@ fn small_button(ui: &mut Ui, text: &str, c: &Colors) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(text).color(c.text2).size(13.0)).frame(false).corner_radius(4))
 }
 
+/// A top-bar icon button: finger-sized (44 points) on touch screens.
+fn bar_button(ui: &mut Ui, icon: &str, color: Color32) -> egui::Response {
+    if theme::touch_ui() {
+        ui.add(egui::Button::new(RichText::new(icon).color(color).size(22.0)).frame(false).min_size(vec2(44.0, 40.0)))
+    } else {
+        ui.add(egui::Button::new(RichText::new(icon).color(color).size(13.0)).frame(false).corner_radius(4))
+    }
+}
+
 // ------------------------------------------------------------------ sidebar
 
 fn row(ui: &mut Ui, selected: bool, c: &Colors, height: f32) -> (Rect, egui::Response) {
+    let height = if theme::touch_ui() { height.max(44.0) } else { height };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     if selected {
         ui.painter().rect_filled(rect, 5.0, c.selected);
-    } else if resp.hovered() {
+    } else if resp.hovered() || resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 5.0, c.hover);
     }
     (rect, resp)
@@ -703,13 +723,15 @@ fn row(ui: &mut Ui, selected: bool, c: &Colors, height: f32) -> (Rect, egui::Res
 fn row_label(ui: &Ui, rect: Rect, x: f32, icon: &str, text: &str, color: Color32, bold: bool) {
     let p = ui.painter();
     let y = rect.center().y;
+    let t = theme::touch_ui();
+    let (fs, gap) = if t { (17.0, 30.0) } else { (14.0, 24.0) };
     let mut x = rect.left() + x;
     if !icon.is_empty() {
-        p.text(pos2(x + 9.0, y), egui::Align2::CENTER_CENTER, icon, FontId::proportional(14.0), color);
-        x += 24.0;
+        p.text(pos2(x + 9.0, y), egui::Align2::CENTER_CENTER, icon, FontId::proportional(fs), color);
+        x += gap;
     }
     let fam = if bold { theme::bold() } else { FontFamily::Proportional };
-    let galley = p.layout_no_wrap(text.to_string(), FontId::new(14.0, fam), color);
+    let galley = p.layout_no_wrap(text.to_string(), FontId::new(fs, fam), color);
     let clip = Rect::from_min_max(pos2(x, rect.top()), pos2(rect.right() - 4.0, rect.bottom()));
     p.with_clip_rect(clip).galley(pos2(x, y - galley.size().y / 2.0), galley, color);
 }
@@ -891,59 +913,104 @@ fn tree(app: &mut App, ui: &mut Ui, parent: &str, depth: usize, now: f64, c: &Co
         return;
     }
     let n = kids.len();
+    let t = theme::touch_ui();
     for (k, (id, icon, title, fav, is_db)) in kids.into_iter().enumerate() {
         let sel = app.current.as_deref() == Some(&id) && !app.show_trash;
         let (rect, resp) = row(ui, sel, c, 28.0);
-        let indent = depth as f32 * 14.0;
+        let indent = depth as f32 * if t { 18.0 } else { 14.0 };
         let open = app.expanded.contains(&id);
         let hovered = hover_rect(ui, rect);
-        // Disclosure arrow (hover) or icon
-        let arrow_rect = Rect::from_center_size(pos2(rect.left() + 31.0 + indent, rect.center().y), vec2(20.0, 20.0));
+        let has_kids = !is_db && !app.ws.children(&id).is_empty();
         let shown_icon = if icon.is_empty() { "📄".to_string() } else { icon.clone() };
-        row_label(ui, rect, 22.0 + indent, &shown_icon, &title, c.text, false);
-        let arrow = ui.interact(arrow_rect, Id::new(("arrow", &id)), Sense::click());
-        if hovered {
-            if arrow.hovered() {
-                ui.painter().rect_filled(arrow_rect, 3.0, c.selected);
+        let mut menu_clicked = false;
+        let arrow_clicked;
+        if t {
+            // Touch: the arrow has its own always-visible column, big enough for a finger.
+            let arrow_rect = Rect::from_min_size(pos2(rect.left() + indent, rect.top()), vec2(30.0, rect.height()));
+            row_label(ui, rect, 28.0 + indent, &shown_icon, &title, c.text, sel);
+            let arrow = ui.interact(arrow_rect, Id::new(("arrow", &id)), Sense::click());
+            if has_kids {
+                ui.painter().text(arrow_rect.center(), egui::Align2::CENTER_CENTER, if open { "⏷" } else { "⏵" }, FontId::proportional(14.0), c.text2);
             }
-            if !is_db {
-                ui.painter().rect_filled(arrow_rect.expand(1.0), 3.0, if arrow.hovered() { c.selected } else if sel { c.selected } else { c.hover });
+            arrow_clicked = arrow.clicked() && has_kids;
+            if arrow_clicked {
+                if open {
+                    app.expanded.remove(&id);
+                } else {
+                    app.expanded.insert(id.clone());
+                }
+            }
+            // The open page shows its "···" and "+" buttons; any row: long-press for the menu.
+            if sel {
+                let dots = Rect::from_min_size(pos2(rect.right() - 84.0, rect.top()), vec2(42.0, rect.height()));
+                let plus = Rect::from_min_size(pos2(rect.right() - 42.0, rect.top()), vec2(42.0, rect.height()));
+                ui.painter().rect_filled(Rect::from_min_max(dots.min, rect.max), 5.0, c.selected);
+                let dr = ui.interact(dots, Id::new(("dots", &id)), Sense::click());
+                ui.painter().text(dots.center(), egui::Align2::CENTER_CENTER, "···", FontId::proportional(20.0), c.text2);
+                let pr = ui.interact(plus, Id::new(("plus_page", &id)), Sense::click());
+                ui.painter().text(plus.center(), egui::Align2::CENTER_CENTER, "+", FontId::proportional(24.0), c.text2);
+                if dr.clicked() {
+                    open_menu(app, ui.ctx(), MenuKind::Page(id.clone()), pos2(rect.right() - 240.0, rect.bottom() + 4.0));
+                    menu_clicked = true;
+                }
+                if pr.clicked() {
+                    app.new_page(&id, now);
+                    menu_clicked = true;
+                }
+            }
+            if resp.long_touched() {
+                open_menu(app, ui.ctx(), MenuKind::Page(id.clone()), pos2(rect.left() + 40.0, rect.bottom() + 4.0));
+                app.ed.ignore_click = true;
+                menu_clicked = true;
+            }
+        } else {
+            // Mouse: the arrow replaces the icon on hover; "···" and "+" appear on hover.
+            let arrow_rect = Rect::from_center_size(pos2(rect.left() + 31.0 + indent, rect.center().y), vec2(20.0, 20.0));
+            row_label(ui, rect, 22.0 + indent, &shown_icon, &title, c.text, false);
+            let arrow = ui.interact(arrow_rect, Id::new(("arrow", &id)), Sense::click());
+            if hovered && !is_db {
+                ui.painter().rect_filled(arrow_rect.expand(1.0), 3.0, if arrow.hovered() || sel { c.selected } else { c.hover });
                 ui.painter().text(arrow_rect.center(), egui::Align2::CENTER_CENTER, if open { "⏷" } else { "⏵" }, FontId::proportional(11.0), c.text2);
             }
-        }
-        if arrow.clicked() && is_db {
-            app.open_page(&id);
-        } else if arrow.clicked() {
-            if open {
-                app.expanded.remove(&id);
-            } else {
-                app.expanded.insert(id.clone());
+            arrow_clicked = arrow.clicked();
+            if arrow_clicked && is_db {
+                app.open_page(&id);
+            } else if arrow_clicked {
+                if open {
+                    app.expanded.remove(&id);
+                } else {
+                    app.expanded.insert(id.clone());
+                }
+            }
+            if hovered {
+                let plus = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(20.0, 20.0));
+                let dots = Rect::from_center_size(pos2(rect.right() - 34.0, rect.center().y), vec2(20.0, 20.0));
+                ui.painter().rect_filled(Rect::from_min_max(pos2(dots.left() - 2.0, rect.top()), rect.right_bottom()), 5.0, if sel { c.selected } else { c.hover });
+                let pr = ui.interact(plus, Id::new(("plus_page", &id)), Sense::click());
+                ui.painter().text(plus.center(), egui::Align2::CENTER_CENTER, "+", FontId::proportional(15.0), c.text2);
+                if pr.on_hover_text("Add a page inside").clicked() {
+                    app.new_page(&id, now);
+                    menu_clicked = true;
+                }
+                let dr = ui.interact(dots, Id::new(("dots", &id)), Sense::click());
+                ui.painter().text(dots.center(), egui::Align2::CENTER_CENTER, "···", FontId::proportional(14.0), c.text2);
+                if dr.on_hover_text("Delete, duplicate, and more").clicked() {
+                    open_menu(app, ui.ctx(), MenuKind::Page(id.clone()), dots.left_bottom() + vec2(0.0, 4.0));
+                    menu_clicked = true;
+                }
+            } else if app.ws.get(&id).map(|e| e.page.folder).unwrap_or(false) {
+                ui.painter().text(pos2(rect.right() - 12.0, rect.center().y), egui::Align2::CENTER_CENTER, "📁", FontId::proportional(11.0), c.text3);
             }
         }
-        let mut menu_clicked = false;
-        if hovered {
-            let plus = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(20.0, 20.0));
-            let dots = Rect::from_center_size(pos2(rect.right() - 34.0, rect.center().y), vec2(20.0, 20.0));
-            ui.painter().rect_filled(Rect::from_min_max(pos2(dots.left() - 2.0, rect.top()), rect.right_bottom()), 5.0, if sel { c.selected } else { c.hover });
-            let pr = ui.put(plus, egui::Button::new(RichText::new("+").color(c.text2)).frame(false)).on_hover_text("Add a page inside");
-            if pr.clicked() {
-                app.new_page(&id, now);
-                menu_clicked = true;
-            }
-            let dr = ui.put(dots, egui::Button::new(RichText::new("···").color(c.text2)).frame(false)).on_hover_text("Delete, duplicate, and more");
-            if dr.clicked() {
-                open_menu(app, ui.ctx(), MenuKind::Page(id.clone()), dots.left_bottom() + vec2(0.0, 4.0));
-                menu_clicked = true;
-            }
-        } else if app.ws.get(&id).map(|e| e.page.folder).unwrap_or(false) {
-            ui.painter().text(pos2(rect.right() - 12.0, rect.center().y), egui::Align2::CENTER_CENTER, "📁", FontId::proportional(11.0), c.text3);
-        }
-        if resp.secondary_clicked() {
+        // Right-click (egui also reports a long press as one; that is handled above).
+        if resp.secondary_clicked() && !resp.long_touched() {
             let pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(rect.center());
             open_menu(app, ui.ctx(), MenuKind::Page(id.clone()), pos);
         }
         let _ = (fav, k, n);
-        if resp.clicked() && !arrow.clicked() && !menu_clicked {
+        if resp.clicked() && app.ed.ignore_click {
+            app.ed.ignore_click = false;
+        } else if resp.clicked() && !arrow_clicked && !menu_clicked {
             app.open_page(&id);
         }
         if open && !is_db {
@@ -1254,15 +1321,20 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
     }
 
     // Top bar: breadcrumb + status
-    let bar = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover()).0;
+    let touch = theme::touch_ui();
+    let bar = ui.allocate_exact_size(vec2(ui.available_width(), if touch { 52.0 } else { 44.0 }), Sense::hover()).0;
     {
-        let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(12.0, 8.0))).layout(Layout::left_to_right(Align::Center)));
+        let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(if touch { 4.0 } else { 12.0 }, if touch { 4.0 } else { 8.0 }))).layout(Layout::left_to_right(Align::Center)));
         if !app.sidebar_open {
-            if small_button(&mut bui, "☰", &c).on_hover_text("Show sidebar (⌘\\)").clicked() {
+            if bar_button(&mut bui, "☰", c.text2).on_hover_text("Show sidebar (⌘\\)").clicked() {
                 app.sidebar_open = true;
             }
-        } else if small_button(&mut bui, "«", &c).on_hover_text("Hide sidebar (⌘\\)").clicked() {
+        } else if !app.narrow && bar_button(&mut bui, "«", c.text2).on_hover_text("Hide sidebar (⌘\\)").clicked() {
             app.sidebar_open = false;
+        }
+        // Phone: a back button to the page you came from.
+        if app.narrow && !app.history.is_empty() && bar_button(&mut bui, "‹", c.text2).on_hover_text("Back").clicked() {
+            app.go_back();
         }
         let path = app.ws.path_to(pid);
         let crumbs: Vec<(String, String)> = path
@@ -1273,7 +1345,7 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
         let n = crumbs.len();
         for (k, (id, label)) in crumbs.into_iter().enumerate() {
             let short: String = label.chars().take(if app.narrow { 18 } else { 28 }).collect();
-            if bui.add(egui::Button::new(RichText::new(short).color(c.text).size(14.0)).frame(false)).clicked() {
+            if bui.add(egui::Button::new(RichText::new(short).color(c.text).size(if touch { 17.0 } else { 14.0 })).frame(false)).clicked() {
                 app.open_page(&id);
             }
             if k + 1 < n {
@@ -1282,7 +1354,7 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
         }
         bui.with_layout(Layout::right_to_left(Align::Center), |bui| {
             let (fav, upd, dirty) = app.ws.get(pid).map(|e| (e.page.favorite, e.page.updated, e.dirty)).unwrap_or_default();
-            let dr = small_button(bui, "···", &c);
+            let dr = bar_button(bui, "···", c.text2);
             egui::Popup::menu(&dr).width(220.0).show(|ui| {
                 ui.checkbox(&mut app.full_width, "Full width");
                 if ui.button("⧉  Duplicate").clicked() {
@@ -1327,11 +1399,7 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
                     ui.label(RichText::new(format!("Edited {}", ago(e.page.updated))).size(11.0).color(c.text3));
                 }
             });
-            let star = if fav {
-                bui.add(egui::Button::new(RichText::new("★").size(15.0).color(Color32::from_rgb(242, 180, 40))).frame(false))
-            } else {
-                small_button(bui, "☆", &c)
-            };
+            let star = if fav { bar_button(bui, "★", Color32::from_rgb(242, 180, 40)) } else { bar_button(bui, "☆", c.text2) };
             if star.on_hover_text(if fav { "Remove from Favorites" } else { "Add to Favorites" }).clicked() {
                 if let Some(e) = app.ws.get_mut(pid) {
                     e.page.favorite = !fav;
@@ -1360,7 +1428,8 @@ pub fn page_view(app: &mut App, ui: &mut Ui, pid: &str, now: f64) {
     let mut page = app.ws.get(pid).unwrap().page.clone();
     let before_sig = signature(&page);
 
-    egui::ScrollArea::vertical().id_salt(("page", pid)).auto_shrink([false, false]).show(ui, |ui| {
+    let scroll_source = if app.ed.drag.is_some() { egui::containers::scroll_area::ScrollSource { drag: egui::containers::scroll_area::DragScroll::Never, ..egui::containers::scroll_area::ScrollSource::ALL } } else { egui::containers::scroll_area::ScrollSource::ALL };
+    egui::ScrollArea::vertical().id_salt(("page", pid)).auto_shrink([false, false]).scroll_source(scroll_source).show(ui, |ui| {
         let avail = ui.available_width();
         // Cover
         if has_cover(&page) {
@@ -2047,6 +2116,7 @@ fn block_row(
     // Layout: [gutter 44][prefix][content]
     let indent_px = b.indent as f32 * 26.0;
     let mut content_rect = Rect::NOTHING;
+    let mut touch_flags: Option<(bool, bool)> = None;
     let resp_rect = ui
         .horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -2211,6 +2281,9 @@ fn block_row(
                     // right where it lands.
                     let touch_static = app.touch && !focused;
                     let ctx2 = ctx.clone();
+                    let ignore_click = app.ed.ignore_click;
+                    let mut tapped = false;
+                    let mut long_pressed = false;
                     let mut edit = |ui: &mut Ui, text: &mut String, width: f32| -> egui::Response {
                         let r = if touch_static {
                             let galley = lay(ui, &*text as &dyn egui::TextBuffer, width - 4.0);
@@ -2222,7 +2295,11 @@ fn block_row(
                             } else {
                                 ui.painter().galley(gpos, galley.clone(), color);
                             }
-                            if resp.clicked() {
+                            if resp.long_touched() {
+                                // Press and hold: pick the block up to move it.
+                                long_pressed = true;
+                            } else if resp.clicked() && !ignore_click {
+                                tapped = true;
                                 let pos = resp.interact_pointer_pos().unwrap_or(gpos);
                                 let at = usize::from(galley.cursor_from_pos(pos - gpos).index);
                                 if let Some((_, _, url)) = link_spans(text).into_iter().find(|(a, b, _)| at > *a && at < *b) {
@@ -2277,11 +2354,31 @@ fn block_row(
                             ui.painter().rect_filled(bar, 0.0, c.text);
                         }
                     }
+                    if touch_static {
+                        touch_flags = Some((tapped, long_pressed));
+                    }
                 }
             }
         })
         .response
         .rect;
+
+    if let Some(flags) = touch_flags {
+        let (tapped, long_pressed) = flags;
+        if long_pressed {
+            app.ed.drag = Some(bid);
+            app.ed.touch_sel = Some(bid);
+            app.ed.ignore_click = true;
+            ctx.memory_mut(|m| m.surrender_focus(te_id));
+        } else if tapped {
+            app.ed.touch_sel = Some(bid);
+        } else if app.ed.ignore_click && ctx.input(|i| i.pointer.any_released()) {
+            app.ed.ignore_click = false;
+        }
+    }
+    if focused && app.touch {
+        app.ed.touch_sel = Some(bid);
+    }
 
     if let Some((url, start)) = pasted {
         let end = start + url.chars().count();
@@ -2368,7 +2465,7 @@ fn block_row(
     let menu_here = matches!(app.ed.menu.as_ref().map(|m| &m.kind), Some(MenuKind::Block(x)) if *x == bid);
     let show_gutter = if app.touch {
         // No hover on touch screens: show the handle on the block being edited.
-        focused || menu_here || app.ed.drag == Some(bid)
+        focused || menu_here || app.ed.drag == Some(bid) || app.ed.touch_sel == Some(bid)
     } else {
         ui.rect_contains_pointer(row_rect) || menu_here
     };
@@ -2382,7 +2479,7 @@ fn block_row(
         };
         let x = row_top.x + indent_px;
         let plus = Rect::from_center_size(pos2(x - 40.0, y), vec2(20.0, 22.0));
-        let grip = if app.touch { Rect::from_center_size(pos2(x - 18.0, y), vec2(28.0, 32.0)) } else { Rect::from_center_size(pos2(x - 18.0, y), vec2(18.0, 22.0)) };
+        let grip = if app.touch { Rect::from_center_size(pos2(x - 19.0, y), vec2(36.0, 40.0)) } else { Rect::from_center_size(pos2(x - 18.0, y), vec2(18.0, 22.0)) };
         // Hover buttons are painted in the margin without taking layout space,
         // so the block itself never moves.
         if !app.narrow {
@@ -2400,7 +2497,7 @@ fn block_row(
         if gr.hovered() || app.ed.drag == Some(bid) {
             ui.painter().rect_filled(grip, 4.0, c.hover);
         }
-        ui.painter().text(grip.center(), egui::Align2::CENTER_CENTER, "⋮⋮", FontId::proportional(13.0), c.text3);
+        ui.painter().text(grip.center(), egui::Align2::CENTER_CENTER, "⋮⋮", FontId::proportional(if app.touch { 22.0 } else { 13.0 }), if app.touch { c.text2 } else { c.text3 });
         let gr = gr.on_hover_text("Drag to move\nClick to open menu").on_hover_cursor(egui::CursorIcon::Grab);
         if gr.drag_started() {
             app.ed.drag = Some(bid);

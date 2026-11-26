@@ -30,6 +30,7 @@ pub fn run_native() -> eframe::Result {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Folio")
+        .with_icon(std::sync::Arc::new(app_icon()))
         .with_inner_size([1280.0, 800.0])
         .with_min_inner_size([360.0, 400.0]);
 
@@ -65,6 +66,19 @@ pub fn run_native() -> eframe::Result {
             Ok(Box::new(App::new(cc, shot)))
         }),
     )
+}
+
+/// The app icon (drawn by `examples/make_icons.rs`), shown in the Dock / taskbar.
+#[cfg(not(target_arch = "wasm32"))]
+fn app_icon() -> eframe::egui::IconData {
+    let bytes = include_bytes!("../assets/icon-desktop.png");
+    match image::load_from_memory(bytes) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            eframe::egui::IconData { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() }
+        }
+        Err(_) => eframe::egui::IconData::default(),
+    }
 }
 
 // ------------------------------------------------------------------ web entry points

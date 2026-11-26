@@ -639,7 +639,7 @@ fn table(app: &mut App, ui: &mut Ui, db_id: &str, db: &mut Db, c: &Colors, dark:
     let rows = rows_of(app, db_id, db);
     let others: f32 = db.columns.iter().map(|c| col_width(c.kind)).sum::<f32>() + 40.0;
     let name_w = (ui.available_width() - others).clamp(if app.narrow { 170.0 } else { 220.0 }, 420.0);
-    let row_h = 36.0;
+    let row_h = if theme::touch_ui() { 48.0 } else { 36.0 };
     let mut renames: Vec<(String, String)> = Vec::new();
     let mut delete_col: Option<usize> = None;
     let mut delete_row: Option<String> = None;
@@ -711,6 +711,7 @@ fn table(app: &mut App, ui: &mut Ui, db_id: &str, db: &mut Db, c: &Colors, dark:
                     egui::TextEdit::singleline(&mut title)
                         .id(Id::new(("dbname", rid)))
                         .frame(egui::Frame::NONE)
+                        .vertical_align(Align::Center)
                         .hint_text(RichText::new("Untitled").color(c.text3))
                         .font(FontId::new(14.0, theme::bold()))
                         .text_color(c.text)

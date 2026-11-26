@@ -40,6 +40,10 @@ pub struct App {
     pub textures: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// Touch screen (iPhone/iPad): no hover, tap to edit, drag to scroll.
     pub touch: bool,
+    /// Pages visited before the current one (phone back button).
+    pub history: Vec<String>,
+    /// Start of a finger swipe from the left edge (opens the sidebar).
+    swipe_start: Option<egui::Pos2>,
     /// Phone-sized window: sidebar slides over the page, tighter margins.
     pub narrow: bool,
     first_frame: bool,
@@ -85,6 +89,8 @@ impl App {
             textures: Default::default(),
             touch: TOUCH_DEVICE.load(Ordering::Relaxed) || std::env::var("FOLIO_SHOT_TOUCH").is_ok(),
             narrow: false,
+            history: Vec::new(),
+            swipe_start: None,
             first_frame: true,
         };
         if let Some(id) = current {
@@ -146,12 +152,37 @@ impl App {
     }
 
     pub fn open_page(&mut self, id: &str) {
+        if let Some(cur) = self.current.clone() {
+            if cur != id {
+                self.history.push(cur);
+                if self.history.len() > 50 {
+                    self.history.remove(0);
+                }
+            }
+        }
         self.current = Some(id.to_string());
         self.show_trash = false;
         self.ed = editor::EditorState::default();
         for anc in self.ws.path_to(id) {
             if anc != id {
                 self.expanded.insert(anc);
+            }
+        }
+    }
+
+    /// Go back to the previous page (skipping pages that were deleted).
+    pub fn go_back(&mut self) {
+        while let Some(prev) = self.history.pop() {
+            if self.ws.get(&prev).map(|e| !e.page.trashed).unwrap_or(false) {
+                self.current = Some(prev.clone());
+                self.show_trash = false;
+                self.ed = editor::EditorState::default();
+                for anc in self.ws.path_to(&prev) {
+                    if anc != prev {
+                        self.expanded.insert(anc);
+                    }
+                }
+                return;
             }
         }
     }
@@ -341,6 +372,32 @@ impl eframe::App for App {
         if ctx.input(|i| i.any_touches()) {
             self.touch = true;
         }
+        theme::set_touch_ui(&ctx, self.touch);
+        // Keep drawing while a finger rests on the screen, so a long press is noticed.
+        if self.touch && ctx.input(|i| i.pointer.primary_down()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
+        // Phone: swipe in from the left edge to open the sidebar, swipe left to close it.
+        if self.narrow && self.touch {
+            let (pressed, down, pos) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.primary_down(), i.pointer.interact_pos()));
+            if pressed {
+                self.swipe_start = pos.filter(|p| if self.sidebar_open { true } else { p.x < 24.0 });
+            }
+            if let (Some(start), Some(p)) = (self.swipe_start, pos) {
+                let (dx, dy) = (p.x - start.x, (p.y - start.y).abs());
+                if !self.sidebar_open && dx > 60.0 && dy < 50.0 {
+                    self.sidebar_open = true;
+                    self.swipe_start = None;
+                } else if self.sidebar_open && dx < -70.0 && dy < 50.0 {
+                    self.sidebar_open = false;
+                    self.swipe_start = None;
+                }
+            }
+            if !down {
+                self.swipe_start = None;
+            }
+        }
         if self.first_frame {
             self.first_frame = false;
             if self.narrow && std::env::var("FOLIO_SHOT_SIDEBAR").is_err() {
@@ -378,7 +435,7 @@ impl eframe::App for App {
                     close = true;
                 }
             });
-            egui::Area::new(egui::Id::new("sidebar_drawer")).order(egui::Order::Middle).fixed_pos(screen.min).interactable(true).show(&ctx, |ui| {
+            egui::Area::new(egui::Id::new("sidebar_drawer")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(true).show(&ctx, |ui| {
                 let rect = egui::Rect::from_min_size(screen.min, egui::vec2(w, screen.height()));
                 ui.painter().rect_filled(rect, 0.0, c.sidebar);
                 let _ = ui.allocate_rect(rect, egui::Sense::hover());
